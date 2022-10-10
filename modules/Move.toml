@@ -1,0 +1,21 @@
+[package]
+name = 'AbelLend'
+version = '1.0.0'
+upgrade_policy = "compatible"
+
+[dependencies.AptosFramework]
+git = 'https://github.com/aptos-labs/aptos-core.git'
+rev = 'devnet'
+subdir = 'aptos-move/framework/aptos-framework'
+
+[dependencies.AptosStdlib]
+git = 'https://github.com/aptos-labs/aptos-core.git'
+rev = 'devnet'
+subdir = 'aptos-move/framework/aptos-stdlib'
+
+[addresses]
+std = "0x1"
+aptos_std = "0x1"
+aptos_token = "0x1"
+aptos_framework = "0x1"
+abel = "0x2"
