@@ -16,6 +16,5 @@ subdir = 'aptos-move/framework/aptos-stdlib'
 [addresses]
 std = "0x1"
 aptos_std = "0x1"
-aptos_token = "0x1"
 aptos_framework = "0x1"
-abel = "0x2"
+abel = "0xed3910ce329669a5a8586ebba1b1b1717dc4bfd26492e36506472e33cae753c1"
