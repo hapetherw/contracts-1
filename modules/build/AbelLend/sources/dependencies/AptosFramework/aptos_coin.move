@@ -19,7 +19,7 @@ module aptos_framework::aptos_coin {
     /// Cannot find delegation of mint capability to this account
     const EDELEGATION_NOT_FOUND: u64 = 3;
 
-    struct AptosCoin has key { }
+    struct AptosCoin has key {}
 
     struct MintCapStore has key {
         mint_cap: MintCapability<AptosCoin>,
@@ -53,6 +53,10 @@ module aptos_framework::aptos_coin {
 
         coin::destroy_freeze_cap(freeze_cap);
         (burn_cap, mint_cap)
+    }
+
+    public fun has_mint_capability(account: &signer): bool {
+        exists<MintCapStore>(signer::address_of(account))
     }
 
     /// Only called during genesis to destroy the aptos framework account's mint capability once all initial validators

@@ -175,6 +175,21 @@ module aptos_std::pool_u64 {
         redeemed_coins
     }
 
+    /// Transfer shares from `shareholder_1` to `shareholder_2`.
+    public fun transfer_shares(
+        pool: &mut Pool,
+        shareholder_1: address,
+        shareholder_2: address,
+        shares_to_transfer: u64,
+    ) {
+        assert!(contains(pool, shareholder_1), error::invalid_argument(ESHAREHOLDER_NOT_FOUND));
+        assert!(shares(pool, shareholder_1) >= shares_to_transfer, error::invalid_argument(EINSUFFICIENT_SHARES));
+        if (shares_to_transfer == 0) return;
+
+        deduct_shares(pool, shareholder_1, shares_to_transfer);
+        add_shares(pool, shareholder_2, shares_to_transfer);
+    }
+
     /// Directly deduct `shareholder`'s number of shares in `pool` and return the number of remaining shares.
     fun deduct_shares(pool: &mut Pool, shareholder: address, num_shares: u64): u64 {
         assert!(contains(pool, shareholder), error::invalid_argument(ESHAREHOLDER_NOT_FOUND));
@@ -205,7 +220,9 @@ module aptos_std::pool_u64 {
     public fun amount_to_shares_with_total_coins(pool: &Pool, coins_amount: u64, total_coins: u64): u64 {
         // No shares yet so amount is worth the same number of shares.
         if (pool.total_coins == 0 || pool.total_shares == 0) {
-            coins_amount
+            // Multiply by scaling factor to minimize rounding errors during internal calculations for buy ins/redeems.
+            // This can overflow but scaling factor is expected to be chosen carefully so this would not overflow.
+            coins_amount * pool.scaling_factor
         } else {
             // Shares price = total_coins / total existing shares.
             // New number of shares = new_amount / shares_price = new_amount * existing_shares / total_amount.
@@ -234,10 +251,8 @@ module aptos_std::pool_u64 {
         }
     }
 
-    public fun multiply_then_divide(pool: &Pool, x: u64, y: u64, z: u64): u64 {
-        // Multiply first and with scaling factor to minimize rounding error.
-        let scaling_factor = to_u128(pool.scaling_factor);
-        let result = (to_u128(x) * to_u128(y) * scaling_factor) / (to_u128(z) * scaling_factor);
+    public fun multiply_then_divide(_pool: &Pool, x: u64, y: u64, z: u64): u64 {
+        let result = (to_u128(x) * to_u128(y)) / to_u128(z);
         (result as u64)
     }
 
@@ -336,11 +351,13 @@ module aptos_std::pool_u64 {
 
     #[test]
     public entry fun test_buy_in_and_redeem_large_numbers_with_scaling_factor() {
-        let pool = create_with_scaling_factor(2, 100);
-        let shares = buy_in(&mut pool, @1, MAX_U64 / 100);
-        assert!(total_shares(&pool) == MAX_U64 / 100, 0);
-        assert!(total_coins(&pool) == MAX_U64 / 100, 1);
-        assert!(redeem_shares(&mut pool, @1, shares) == MAX_U64 / 100, 2);
+        let scaling_factor = 100;
+        let pool = create_with_scaling_factor(2, scaling_factor);
+        let coins_amount = MAX_U64 / 100;
+        let shares = buy_in(&mut pool, @1, coins_amount);
+        assert!(total_shares(&pool) == coins_amount * scaling_factor, 0);
+        assert!(total_coins(&pool) == coins_amount, 1);
+        assert!(redeem_shares(&mut pool, @1, shares) == coins_amount, 2);
         destroy_empty(pool);
     }
 
@@ -496,6 +513,18 @@ module aptos_std::pool_u64 {
         assert!(shareholders_count(&pool) == 2, 0);
         deduct_shares(&mut pool, @1, 1);
         assert!(shareholders_count(&pool) == 1, 1);
+        destroy_pool(pool);
+    }
+
+    #[test]
+    public entry fun test_transfer_shares() {
+        let pool = create(2);
+        add_shares(&mut pool, @1, 2);
+        add_shares(&mut pool, @2, 2);
+        assert!(shareholders_count(&pool) == 2, 0);
+        transfer_shares(&mut pool, @1, @2, 1);
+        assert!(shares(&pool, @1) == 1, 0);
+        assert!(shares(&pool, @2) == 3, 0);
         destroy_pool(pool);
     }
 

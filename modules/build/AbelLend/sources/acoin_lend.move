@@ -1,5 +1,7 @@
 module abel::acoin_lend {
     
+    use std::error;
+    use std::string;
     use std::signer;
 
     use aptos_std::type_info::type_of;
@@ -24,11 +26,29 @@ module abel::acoin_lend {
     const ETOKEN_INSUFFICIENT_CASH: u64 = 7;
     const EREDUCE_AMOUNT_TO_MUCH: u64 = 8;
     const ENOT_ADMIN: u64 = 9;
+    const EWITHDRAW_NOT_ALLOWED : u64 = 10;
+    const EDEPOSIT_NOT_ALLOWED : u64 = 11;
+    const EMINT_NOT_ALLOWED : u64 = 12;
+    const EREDEEM_NOT_ALLOWED : u64 = 13;
+    const EBORROW_NOT_ALLOWED : u64 = 14;
+    const EREPAY_BORROW_NOT_ALLOWED : u64 = 15;
+    const ELIQUIDATE_BORROW_NOT_ALLOWED : u64 = 16;
+    const EINITIALIZE_NOT_ALLOWED : u64 = 16;
 
+    // hook errors
+    const NO_ERROR: u64 = 0;
+    const EMARKET_NOT_LISTED: u64 = 101;
+    const EINSUFFICIENT_LIQUIDITY: u64 = 102;
+    const EREDEEM_TOKENS_ZERO: u64 = 103;
+    const ENOT_MARKET_MEMBER: u64 = 104;
+    const EPRICE_ERROR: u64 = 105;
+    const EINSUFFICIENT_SHORTFALL: u64 = 106;
+    const ETOO_MUCH_REPAY: u64 = 107;
 
     //
     // entry functions
     //
+
     public entry fun transfer<CoinType>(
         from: &signer, 
         to: address, 
@@ -63,7 +83,7 @@ module abel::acoin_lend {
         redeem_amount: u64,
     ) {
         let redeemer_addr = signer::address_of(redeemer);
-        let exchange_rate_mantissa = exchange_rate_mantissa<CoinType>();
+        let exchange_rate_mantissa = acoin::exchange_rate_mantissa<CoinType>();
         let redeem_tokens = ((redeem_amount as u128) * Exp_Scale() / exchange_rate_mantissa as u64);
         let acoin = acoin::withdraw<CoinType>(redeemer_addr, redeem_tokens);
         let coin = redeem<CoinType>(redeemer, acoin);
@@ -103,19 +123,6 @@ module abel::acoin_lend {
     //
     // Getter functions
     //
-    public fun exchange_rate_mantissa<CoinType>(): u128 {
-        let supply = acoin::total_supply<CoinType>();
-        if (supply == 0) {
-            acoin::initial_exchange_rate_mantissa<CoinType>()
-        } else {
-            let supply = acoin::total_supply<CoinType>();
-            let total_cash = (acoin::get_cash<CoinType>() as u128);
-            let total_borrows = acoin::total_borrows<CoinType>();
-            let total_reserves = acoin::total_reserves<CoinType>();
-            let cash_plus_borrows_minus_reserves = total_cash + total_borrows - total_reserves;
-            cash_plus_borrows_minus_reserves * Exp_Scale() / supply
-        }
-    }
 
     public fun admin<CoinType>(): address {
         @abel
@@ -125,13 +132,32 @@ module abel::acoin_lend {
     // Public functions
     //
 
+    public fun initialize<CoinType>(
+        admin: &signer,
+        name: string::String,
+        symbol: string::String,
+        decimals: u8,
+        initial_exchange_rate_mantissa: u128,
+    ) {
+        let admin_addr = signer::address_of(admin);
+        only_admin<CoinType>(admin);
+        let allowed = market::init_allowed<CoinType>(admin_addr, name, symbol, decimals, initial_exchange_rate_mantissa);
+        assert!(allowed == 0, error::invalid_argument(allowed));
+        acoin::initialize<CoinType>(admin, name, symbol, decimals, initial_exchange_rate_mantissa);
+        market::init_verify<CoinType>(admin_addr, name, symbol, decimals, initial_exchange_rate_mantissa);
+    }
+
+    public fun register<CoinType>(account: &signer) {
+        acoin::register<CoinType>(account);
+    }
+
     public fun withdraw<CoinType>(
         account: &signer,
         amount: u64,
     ): ACoin<CoinType> {
         let src = signer::address_of(account);
-        let err = market::withdraw_allowed<CoinType>(src, amount);
-        assert!(err == 0, err);
+        let allowed = market::withdraw_allowed<CoinType>(src, amount);
+        assert!(allowed == 0, error::invalid_argument(allowed));
         let acoin = acoin::withdraw<CoinType>(src, amount);
         market::withdraw_verify<CoinType>(src, amount);
         acoin
@@ -143,8 +169,8 @@ module abel::acoin_lend {
     ) {
         let dst = signer::address_of(account);
         let amount = acoin::value<CoinType>(&acoin);
-        let err = market::deposit_allowed<CoinType>(dst, amount);
-        assert!(err == 0, err);
+        let allowed = market::deposit_allowed<CoinType>(dst, amount);
+        assert!(allowed == 0, error::invalid_argument(allowed));
         acoin::deposit<CoinType>(dst, acoin);
         market::deposit_verify<CoinType>(dst, amount);
     }
@@ -163,7 +189,7 @@ module abel::acoin_lend {
         let borrow_index_prior = acoin::borrow_index<CoinType>();
 
         let borrow_rate_mantissa = interest_rate_module::get_borrow_rate((cash_prior as u128), borrows_prior, reserves_prior);
-        assert!(borrow_rate_mantissa <= Borrow_Rate_Max_Mantissa(), EBORROW_RATE_ABSURDLY_HIGH);
+        assert!(borrow_rate_mantissa <= Borrow_Rate_Max_Mantissa(), error::out_of_range(EBORROW_RATE_ABSURDLY_HIGH));
 
         let block_delta = current_block_number - accrual_block_number_prior;
         let reserve_factor_mantissa = acoin::reserve_factor_mantissa<CoinType>();
@@ -190,14 +216,13 @@ module abel::acoin_lend {
 
         accrue_interest<CoinType>();
 
-        let err = market::mint_allowed<CoinType>(minter_addr, mint_amount);
-        assert!(err == 0, err);
+        let allowed = market::mint_allowed<CoinType>(minter_addr, mint_amount);
+        assert!(allowed == 0, error::invalid_argument(allowed));
 
-        let exchange_rate_mantissa = exchange_rate_mantissa<CoinType>();
+        let exchange_rate_mantissa = acoin::exchange_rate_mantissa<CoinType>();
         let mint_tokens = ((mint_amount as u128) * Exp_Scale() / exchange_rate_mantissa as u64);
 
         acoin::deposit_to_treasury<CoinType>(coin);
-        acoin::add_supply<CoinType>((mint_tokens as u128));
 
         market::mint_verify<CoinType>(minter_addr, mint_amount, mint_tokens);
 
@@ -215,13 +240,11 @@ module abel::acoin_lend {
 
         accrue_interest<CoinType>();
 
-        let err = market::redeem_allowed<CoinType>(redeemer_addr, redeem_tokens);
-        assert!(err == 0, err);  
+        let allowed = market::redeem_with_fund_allowed<CoinType>(redeemer_addr, redeem_tokens);
+        assert!(allowed == 0, error::invalid_argument(allowed));  
 
-        let exchange_rate_mantissa = exchange_rate_mantissa<CoinType>();
+        let exchange_rate_mantissa = acoin::exchange_rate_mantissa<CoinType>();
         let redeem_amount = ((redeem_tokens as u128) * exchange_rate_mantissa / Exp_Scale() as u64);
-
-        acoin::sub_supply<CoinType>((redeem_tokens as u128));
 
         market::redeem_verify<CoinType>(redeemer_addr, redeem_amount, redeem_tokens);
 
@@ -238,8 +261,8 @@ module abel::acoin_lend {
 
         accrue_interest<CoinType>();
 
-        let err = market::borrow_allowed<CoinType>(borrower_addr, borrow_amount);
-        assert!(err == 0, err); 
+        let allowed = market::borrow_allowed<CoinType>(borrower_addr, borrow_amount);
+        assert!(allowed == 0, error::invalid_argument(allowed)); 
 
         let account_borrows = acoin::borrow_balance<CoinType>(borrower_addr);
         let account_borrows_new = account_borrows + borrow_amount;
@@ -265,8 +288,8 @@ module abel::acoin_lend {
 
         accrue_interest<CoinType>();
 
-        let err = market::repay_borrow_allowed<CoinType>(payer_addr, borrower, repay_amount);
-        assert!(err == 0, err); 
+        let allowed = market::repay_borrow_allowed<CoinType>(payer_addr, borrower, repay_amount);
+        assert!(allowed == 0, error::invalid_argument(allowed)); 
 
         acoin::deposit_to_treasury<CoinType>(coin);
 
@@ -294,19 +317,18 @@ module abel::acoin_lend {
         accrue_interest<BorrowedCoinType>();
         accrue_interest<CollateralCoinType>();
 
-        let err = market::liquidate_borrow_allowed<BorrowedCoinType, CollateralCoinType>(liquidator_addr, borrower, repay_amount);
-        assert!(err == 0, err);
+        let allowed = market::liquidate_borrow_allowed<BorrowedCoinType, CollateralCoinType>(liquidator_addr, borrower, repay_amount);
+        assert!(allowed == 0, error::invalid_argument(allowed));
 
-        assert!(borrower != liquidator_addr, ELIQUIDATE_SEIZE_LIQUIDATOR_IS_BORROWER);
+        assert!(borrower != liquidator_addr, error::invalid_argument(ELIQUIDATE_SEIZE_LIQUIDATOR_IS_BORROWER));
 
-        assert!(repay_amount != 0, ELIQUIDATE_CLOSE_AMOUNT_IS_ZERO);
+        assert!(repay_amount != 0, error::invalid_argument(ELIQUIDATE_CLOSE_AMOUNT_IS_ZERO));
 
         repay_borrow<BorrowedCoinType>(liquidator, borrower, coin);
 
-        let (amount_seize_error, seize_tokens) = market::liquidate_calculate_seize_tokens<BorrowedCoinType, CollateralCoinType>(repay_amount);
-        assert!(amount_seize_error == 0, amount_seize_error);
+        let seize_tokens = market::liquidate_calculate_seize_tokens<BorrowedCoinType, CollateralCoinType>(repay_amount);
 
-        assert!(seize_tokens <= acoin::balance<CollateralCoinType>(borrower), ELIQUIDATE_SEIZE_TOO_MUCH);
+        assert!(seize_tokens <= acoin::balance<CollateralCoinType>(borrower), error::resource_exhausted(ELIQUIDATE_SEIZE_TOO_MUCH));
 
         let acoin = seize<CollateralCoinType, BorrowedCoinType>(liquidator, borrower, seize_tokens);
 
@@ -324,7 +346,7 @@ module abel::acoin_lend {
     public fun set_reserve_factor<CoinType>(admin: &signer, new_reserve_factor_mantissa: u128) {
         only_admin<CoinType>(admin);
         accrue_interest<CoinType>();
-        assert!(new_reserve_factor_mantissa <= Reserve_Factor_Max_Mantissa(), ERESERVE_FACTOR_OUT_OF_BOUND);
+        assert!(new_reserve_factor_mantissa <= Reserve_Factor_Max_Mantissa(), error::out_of_range(ERESERVE_FACTOR_OUT_OF_BOUND));
         let old_reserve_factor_mantissa = acoin::reserve_factor_mantissa<CoinType>();
         acoin::set_reserve_factor_mantissa<CoinType>(new_reserve_factor_mantissa);
         acoin::emit_new_reserve_factor_event<CoinType>(old_reserve_factor_mantissa, new_reserve_factor_mantissa);
@@ -342,8 +364,8 @@ module abel::acoin_lend {
         only_admin<CoinType>(admin);
         let admin_addr = admin<CoinType>();
         accrue_interest<CoinType>();
-        assert!(acoin::total_reserves<CoinType>() >= (reduce_amount as u128), EREDUCE_AMOUNT_TO_MUCH);
-        assert!(acoin::get_cash<CoinType>() >= reduce_amount, ETOKEN_INSUFFICIENT_CASH);
+        assert!(acoin::total_reserves<CoinType>() >= (reduce_amount as u128), error::resource_exhausted(EREDUCE_AMOUNT_TO_MUCH));
+        assert!(acoin::get_cash<CoinType>() >= reduce_amount, error::resource_exhausted(ETOKEN_INSUFFICIENT_CASH));
         acoin::sub_reserves<CoinType>((reduce_amount as u128));
         let coin = acoin::withdraw_from_treasury<CoinType>(reduce_amount);
         coin::deposit<CoinType>(admin_addr, coin);
@@ -355,7 +377,7 @@ module abel::acoin_lend {
     //
 
     fun only_admin<CoinType>(account: &signer) {
-        assert!(signer::address_of(account) == admin<CoinType>(), ENOT_ADMIN);
+        assert!(signer::address_of(account) == admin<CoinType>(), error::permission_denied(ENOT_ADMIN));
     }
 
     fun seize<CollateralCoinType, BorrowedCoinType>(
@@ -365,10 +387,10 @@ module abel::acoin_lend {
     ): ACoin<CollateralCoinType> {
         let liquidator_addr = signer::address_of(liquidator);
 
-        let err = market::seize_allowed<CollateralCoinType, BorrowedCoinType>(liquidator_addr, borrower, seize_tokens);
-        assert!(err == 0, err); 
+        let allowed = market::seize_allowed<CollateralCoinType, BorrowedCoinType>(liquidator_addr, borrower, seize_tokens);
+        assert!(allowed == 0, error::invalid_argument(allowed)); 
 
-        assert!(borrower != liquidator_addr, ELIQUIDATE_SEIZE_LIQUIDATOR_IS_BORROWER);
+        assert!(borrower != liquidator_addr, error::invalid_argument(ELIQUIDATE_SEIZE_LIQUIDATOR_IS_BORROWER));
 
         let acoin = acoin::withdraw<CollateralCoinType>(borrower, seize_tokens);
 
